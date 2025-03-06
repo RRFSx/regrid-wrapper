@@ -37,6 +37,7 @@ class AbstractRaveField(ABC, BaseModel):
     attrs: dict[str, Any]
     fill_value: float
     dtype: Any
+    ncells: int
 
     @computed_field
     @cached_property
@@ -65,7 +66,7 @@ class AbstractRaveField(ABC, BaseModel):
     def create_ncells_dimension(self, bounds: tuple[int, int]) -> Dimension:
         return Dimension(
             name=("nCells",),
-            size=130333,  # tdk: pull from origin,
+            size=self.ncells,
             lower=bounds[0],
             upper=bounds[1],
             staggerloc=esmpy.MeshLoc.ELEMENT,
@@ -119,6 +120,7 @@ class RaveToMpasRegridContext(BaseModel):
     tmp_path: Path
     weight_path: Path
     scrip_path: Path
+    ncells: int
     rank: int = COMM.rank
 
     @computed_field
@@ -134,6 +136,7 @@ class RaveToMpasRegridContext(BaseModel):
                     "attrs": self._get_nc_attrs_(var),
                     "fill_value": -1.0,
                     "dtype": var.dtype,
+                    "ncells": self.ncells,
                 }
                 if field_name in ("FRE", "FRP_MEAN"):
                     app = RaveField2d.model_validate(init_data)
