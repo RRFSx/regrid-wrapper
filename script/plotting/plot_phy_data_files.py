@@ -15,12 +15,13 @@ def main() -> None:
         "/scratch1/NCEPDEV/stmp2/Benjamin.Koziol/sandbox/srw/benkozi/develop/expt_dirs/smoke_dust_conus3km"
     )
 
-    filenames = glob.glob("**/*SMOKE_RRFS_data*nc", root_dir=root_dir, recursive=True)
+    slug = "**/*phyf*nc"
+    filenames = glob.glob(slug, root_dir=root_dir, recursive=True)
     for ctr, filename in enumerate(filenames):
         path = root_dir / filename
         print(path)
         grid = Grid(path=path, lat_name="geolat", lon_name="geolon")
-        print(grid.describe())
+        # print(grid.describe())
 
         # Create a figure and set the projection
         fig, ax = plt.subplots(
