@@ -20,7 +20,8 @@ def main() -> None:
     for ctr, filename in enumerate(filenames):
         path = root_dir / filename
         print(path)
-        grid = Grid(path=path, lat_name="geolat", lon_name="geolon")
+        grid = Grid(path=path, lat_name="grid_latt", lon_name="grid_lont")
+        # grid = Grid(path=path, lat_name="geolat", lon_name="geolon")
         # print(grid.describe())
 
         # Create a figure and set the projection
