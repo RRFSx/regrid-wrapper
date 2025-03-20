@@ -37,8 +37,8 @@ def main() -> None:
 
         lon_grid = grid.get(grid.lon_name)
         lat_grid = grid.get(grid.lat_name)
-        data = grid.get("ebb_smoke_hr")
-        data = data[22, :, :]
+        data = grid.get("ebu_smoke")
+        data = data[0, :, :, :]
         mesh = ax.pcolormesh(
             lon_grid,
             lat_grid,
