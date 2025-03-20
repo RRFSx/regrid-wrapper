@@ -1,0 +1,6 @@
+name: pyremap
+channels:
+  - conda-forge
+dependencies:
+  - pyremap
+  - typer
