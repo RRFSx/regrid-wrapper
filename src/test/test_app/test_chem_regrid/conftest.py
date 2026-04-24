@@ -8,7 +8,8 @@ import pytest
 import xarray as xr
 from pydantic import BaseModel
 
-from regrid_wrapper.app.chem_regrid.context import ChemRegridContext, DatasetName
+from regrid_wrapper.app.chem_regrid.chem_regrid_context import ChemRegridContext
+from regrid_wrapper.app.chem_regrid.dataset.context import DatasetName
 from regrid_wrapper.context.comm import COMM
 from test.conftest import create_analytic_data_array, create_rrfs_grid_file
 
@@ -612,7 +613,7 @@ def chem_regrid_context(tmp_path_shared: Path, dataset_test_ctx: DatasetTestCont
         weight_dir=dataset_test_ctx.weight_dir,
         cycle=cycle,
         mesh_name="test_mesh",
-        scrip_path=dataset_test_ctx.ugrid_path,
+        input_mesh_path=dataset_test_ctx.ugrid_path,
         dst_path=dst_path,
         ebb_dcycle=ebb_dcycle,
         fcst_length=24,

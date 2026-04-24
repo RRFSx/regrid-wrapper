@@ -1,15 +1,16 @@
 import abc
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterator, Literal, Sequence, Tuple, Union
+from typing import Annotated, Any, Dict, Iterator, List, Literal, Sequence, Tuple, Union
 
 import esmpy
 import netCDF4 as nc
 import numpy as np
 from mpi4py import MPI
+from pydantic import BeforeValidator, ConfigDict, model_validator
 
+from regrid_wrapper.common import RwBaseModel
 from regrid_wrapper.context.comm import COMM, Tag, reconcile_bounds
 from regrid_wrapper.context.logging import LOGGER
 
@@ -71,7 +72,15 @@ def copy_nc_variable(src: nc.Dataset, dst: nc.Dataset, varname: str, copy_data: 
         new_var[:] = var[:]
 
 
-NameListType = Tuple[str, ...]
+def _coerce_to_tuple_(v: str | List[str] | Tuple[str, ...]) -> Tuple[str, ...]:
+    if isinstance(v, str):
+        return (v,)
+    if isinstance(v, list):
+        return tuple(v)
+    return v
+
+
+NameListType = Annotated[Tuple[str, ...] | str, BeforeValidator(_coerce_to_tuple_)]
 
 
 def get_aliased_key(source: Dict, keys: NameListType | str) -> Any:
@@ -91,22 +100,20 @@ def get_nc_dimension(ds: nc.Dataset, names: NameListType) -> nc.Dimension:
     return get_aliased_key(ds.dimensions, names)
 
 
-@dataclass
-class Dimension:
+class Dimension(RwBaseModel):
     name: NameListType
     size: int
     lower: int
     upper: int
     staggerloc: int
-    coordinate_type: Literal["y", "x", "time", "element", "level"]
+    coordinate_type: Literal["y", "x", "time", "element", "level", "cell"]
 
     @property
     def bounds(self) -> tuple[int, int]:
         return self.lower, self.upper
 
 
-@dataclass
-class DimensionCollection:
+class DimensionCollection(RwBaseModel):
     value: Tuple[Dimension, ...]
 
     @property
@@ -185,13 +192,11 @@ def set_variable_data_serial(path: Path, varname: str, target_dims: DimensionCol
     COMM.barrier()
 
 
-@dataclass
-class AbstractWrapper(abc.ABC):
+class AbstractWrapper(RwBaseModel, abc.ABC):
     dims: DimensionCollection
 
 
-@dataclass
-class GridSpec:
+class GridSpec(RwBaseModel):
     x_center: str
     y_center: str
     x_dim: NameListType
@@ -203,7 +208,8 @@ class GridSpec:
     x_index: int = 0
     y_index: int = 1
 
-    def __post_init__(self) -> None:
+    @model_validator(mode="after")
+    def _validate_corners_(self) -> "GridSpec":
         corner_meta = [
             self.x_corner,
             self.y_corner,
@@ -213,6 +219,7 @@ class GridSpec:
         is_given_sum = sum([ii is not None for ii in corner_meta])
         if is_given_sum > 0 and is_given_sum != len(corner_meta):
             raise ValueError("if one corner name is supplied, then all must be supplied")
+        return self
 
     @property
     def has_corners(self) -> bool:
@@ -268,8 +275,8 @@ class GridSpec:
         return DimensionCollection(value=tuple(value))
 
 
-@dataclass
 class GridWrapper(AbstractWrapper):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     value: esmpy.Grid
     spec: GridSpec
     corner_dims: DimensionCollection | None = None
@@ -285,16 +292,21 @@ class GridWrapper(AbstractWrapper):
             set_variable_data(ds.variables[self.spec.y_center], self.dims, y_center_data)
 
 
-@dataclass
 class MeshWrapper(AbstractWrapper):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     value: esmpy.Mesh
 
 
-@dataclass
-class NcToMesh:
+class NcToMesh(RwBaseModel):
     path: Path
     filetype: int = esmpy.FileFormat.UGRID
     meshname: str = "grid_topology"
+
+    @model_validator(mode="after")
+    def _validate_path_(self) -> "NcToMesh":
+        if not self.path.exists():
+            raise FileNotFoundError(self.path)
+        return self
 
     def create_mesh_wrapper(self) -> MeshWrapper:
         t1 = time.perf_counter()
@@ -324,13 +336,8 @@ class NcToMesh:
         mwrap = MeshWrapper(value=mesh, dims=dims)
         return mwrap
 
-    def __post_init__(self) -> None:
-        if not self.path.exists():
-            raise FileNotFoundError(self.path)
 
-
-@dataclass
-class NcToGrid:
+class NcToGrid(RwBaseModel):
     path: Path
     spec: GridSpec
 
@@ -386,10 +393,14 @@ class NcToGrid:
 GeomType = GridWrapper | MeshWrapper
 
 
-@dataclass
 class FieldWrapper(AbstractWrapper):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     value: esmpy.Field
     gwrap: GeomType
+
+    @property
+    def data(self) -> np.ndarray:
+        return self.value.data
 
     def fill_nc_variable(self, path: Path) -> None:
         _LOGGER.debug(r"filling variable: {self.value.name}")
@@ -398,8 +409,7 @@ class FieldWrapper(AbstractWrapper):
             set_variable_data(var, self.dims, self.value.data)
 
 
-@dataclass
-class MetaToField:
+class MetaToField(RwBaseModel):
     name: str
     gwrap: GeomType
     staggerloc: int = esmpy.StaggerLoc.CENTER
@@ -428,8 +438,7 @@ class MetaToField:
         return FieldWrapper(value=field, dims=target_dims, gwrap=self.gwrap)
 
 
-@dataclass
-class NcToField:
+class NcToField(RwBaseModel):
     path: Path
     name: str
     gwrap: GeomType
@@ -501,14 +510,15 @@ class NcToField:
             return fwrap
 
 
-@dataclass
-class FieldWrapperCollection:
+class FieldWrapperCollection(RwBaseModel):
     value: Tuple[FieldWrapper, ...]
 
     def fill_nc_variables(self, path: Path) -> None:
         for fwrap in self.value:
             fwrap.fill_nc_variable(path)
 
-    def __post_init__(self) -> None:
+    @model_validator(mode="after")
+    def _validate_fields_(self) -> "FieldWrapperCollection":
         if len(set([id(ii.value.grid) for ii in self.value])) != 1:
             raise ValueError("all fields must share the same grid")
+        return self
