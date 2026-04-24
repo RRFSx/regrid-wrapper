@@ -1,6 +1,6 @@
 import glob
 from abc import ABC, abstractmethod
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import StrEnum, unique
 from functools import cached_property
 from pathlib import Path
@@ -8,7 +8,7 @@ from typing import Any, Iterator, Union
 
 import esmpy
 import numpy as np
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from regrid_wrapper.app.chem_regrid import CR_LOGGER
 from regrid_wrapper.app.chem_regrid.dataset.src_field import SrcField
@@ -17,6 +17,7 @@ from regrid_wrapper.esmpy.field_wrapper import (
     DimensionCollection,
     FieldWrapper,
     HasNcAttrsType,
+    copy_nc_variable,
     open_nc,
 )
 
@@ -90,9 +91,9 @@ class AbstractDatasetRegridContext(ABC, BaseModel):
     level_in_name: str | None
     # level_in_size: int
     level_out_name: str | None
-    level_out_size: int
+    level_out_size: int | None
     time_name: str | None
-    time_size: int
+    time_size: int | None
     cycle: str
     ebb_dcycle: int
     input_dir: Path
@@ -224,13 +225,12 @@ class AbstractDatasetRegridContext(ABC, BaseModel):
     def transform_regridded_data(
         self,
         src_field: SrcField,
-        dst_field_data: np.ndarray,
+        dst_fwrap: FieldWrapper,
         ds: Any,
-        reconciled_bounds: tuple[int, int],
         dims: DimensionCollection,
     ) -> np.ndarray:
         """Hook for dataset-specific data transformations after regridding but before writing."""
-        return dst_field_data
+        return dst_fwrap.data
 
     def post_regrid_processing(
         self,
@@ -241,3 +241,35 @@ class AbstractDatasetRegridContext(ABC, BaseModel):
     ) -> None:
         """Hook for dataset-specific operations after a field has been regridded and written."""
         pass
+
+    def create_output_file(self) -> None:
+        if self.rank == 0:
+            with open_nc(self.new_dst_path, mode="w", clobber=True, parallel=False) as dst_nc:
+                dst_nc.createDimension("nCells", self.num_cells)
+                if self.level_out_name is not None:
+                    dst_nc.createDimension(self.level_out_name, self.level_out_size)
+                dst_nc.createDimension("StrLen", 64)
+                if self.time_size is not None and self.time_size > 1:
+                    dst_nc.createDimension("Time", self.time_size)
+                elif self.time_size == 1:
+                    if "Time" not in dst_nc.dimensions:
+                        dst_nc.createDimension("Time")
+                    else:
+                        CR_LOGGER.debug("Not creating a time dimension")
+                dst_nc.setncattr("created_at", str(datetime.now(timezone.utc)))
+                dst_nc.setncattr("src_path", str(self.src_path))
+                dst_nc.setncattr("dst_path", str(self.dst_path))
+
+                with open_nc(self.dst_path, mode="r", parallel=False) as src_nc:
+                    for varname in self.var_names_to_copy_to_output_file:
+                        copy_nc_variable(src_nc, dst_nc, varname, copy_data=True)
+
+    @model_validator(mode="after")
+    def _validate_model(self) -> "AbstractDatasetRegridContext":
+        level_values = [self.level_out_name, self.level_out_size]
+        if any(level_values) and not all(level_values):
+            raise ValueError("level_out_name and level_out_size must be specified together")
+        time_values = [self.time_name, self.time_size]
+        if any(time_values) and not all(time_values):
+            raise ValueError("time_name and time_size must be specified together")
+        return self
